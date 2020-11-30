@@ -50,7 +50,6 @@ class Curve:
                      position=x_vals, position_discharge=x_vals_discharge)
 
     def plot(self):
-
         plt.xlabel('Load [grF]')
         plt.ylabel('Displacement [μm]\nDcorrected')
         plt.plot(self.load, self.position, color=loading_color, label="loading")
