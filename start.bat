@@ -1,3 +1,3 @@
-.\env\Scripts\activate
+.\venv\Scripts\activate
 py main.py
 deactivate
