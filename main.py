@@ -15,28 +15,31 @@ matplotlib.use('Qt5Agg')
 
 class MplCanvas(FigureCanvasQTAgg):
 
-    def __init__(self, parent=None, width=9, height=9, dpi=100, experiment=None, experiments=None, stiffness=False,
-                 all_points=False, loading=True, unloading=True, mean=False, trashed=False):
+    def __init__(self, parent=None, width=9, height=9, dpi=100):
+        experiment = parent.experiments.get_selected()
         fig = Figure(figsize=(width, height), dpi=dpi)
         self.axes = fig.add_subplot(111)
         if experiment.failed:
             self.axes.text(0.5, 0.5, f"FAILED\n{experiment.filename}", bbox=dict(facecolor='red', alpha=0.9))
         else:
-            if stiffness:
-                if all_points:
-                    experiments.plot_all_stiffness_points(self.axes, loading=loading, unloading=unloading,
-                                                          trashed=trashed)
-                if mean:
-                    experiments.plot_mean_stiffness(self.axes, loading=loading, unloading=unloading)
+            if parent.stiffness:
+                if parent.all_points:
+                    parent.experiments.plot_all_stiffness_points(self.axes, loading=parent.loading,
+                                                                 unloading=parent.unloading,
+                                                                 trashed=parent.trashed)
 
-                experiment.plot_stiffness(self.axes, loading=loading, unloading=unloading)
+                parent.experiments.plot_mean_stiffness(self.axes, loading=parent.loading_mean,
+                                                       unloading=parent.unloading_mean)
+                experiment.plot_stiffness(self.axes, loading=parent.loading, unloading=parent.unloading)
             else:
-                if all_points:
-                    experiments.plot_all_cutoff_points(self.axes, loading=loading, unloading=unloading, trashed=trashed)
-                if mean:
-                    experiments.plot_mean_cutoff_points(self.axes, loading=loading, unloading=unloading)
+                if parent.all_points:
+                    parent.experiments.plot_all_cutoff_points(self.axes, loading=parent.loading,
+                                                              unloading=parent.unloading,
+                                                              trashed=parent.trashed)
 
-                experiment.plot_cutoff(self.axes, loading=loading, unloading=unloading)
+                parent.experiments.plot_mean_cutoff_points(self.axes, loading=parent.loading_mean,
+                                                           unloading=parent.unloading_mean)
+                experiment.plot_cutoff(self.axes, loading=parent.loading, unloading=parent.unloading)
 
         super(MplCanvas, self).__init__(fig)
 
@@ -53,8 +56,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.all_points = False
         self.loading = True
         self.unloading = True
-        self.mean = False
+
         self.trashed = False
+
+        self.loading_mean = False
+        self.unloading_mean = False
 
         self.layout = QtWidgets.QVBoxLayout()
         self.refresh_plot()
@@ -62,6 +68,7 @@ class MainWindow(QtWidgets.QMainWindow):
         bar = self.menuBar()
         file_menu = bar.addMenu('File')
         actions_menu = bar.addMenu('Actions')
+        view_menu = bar.addMenu('View')
 
         # adding actions to edit menu
         self.create_action('Next', QKeySequence.MoveToNextChar, actions_menu, self.to_next)
@@ -69,17 +76,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.create_action('Set manual offset', QKeySequence("o"), actions_menu, self.set_manual_cutoff)
         self.create_action('Keep', QKeySequence("k"), actions_menu, self.keep_fun)
         self.create_action('Trash', QKeySequence("t"), actions_menu, self.trash_fun)
-        self.create_action('Stiffness Corrected Measurement', QKeySequence("TAB"), actions_menu, self.toggle_plot_fun,
+
+        self.create_action('Stiffness Corrected Measurement', QKeySequence("TAB"), view_menu, self.toggle_plot_fun,
                            checkable=True)
-        self.create_action('Show all points', QKeySequence("a"), actions_menu, self.toggle_all_points_fun,
+        self.create_action('All points', QKeySequence("a"), view_menu, self.toggle_all_points_fun,
                            checkable=True)
-        self.create_action('Show trashed', QKeySequence("d"), actions_menu, self.toggle_trashed_fun,
+        self.create_action('Trashed', QKeySequence("d"), view_menu, self.toggle_trashed_fun,
                            checkable=True)
-        self.create_action('Show loading', QKeySequence("l"), actions_menu, self.toggle_loading_fun, checkable=True,
+        self.create_action('Loading', QKeySequence("l"), view_menu, self.toggle_loading_fun, checkable=True,
                            checked=True)
-        self.create_action('Show unloading', QKeySequence("u"), actions_menu, self.toggle_unloading_fun,
+        self.create_action('Unloading', QKeySequence("u"), view_menu, self.toggle_unloading_fun,
                            checkable=True, checked=True)
-        self.create_action('Show mean', QKeySequence("m"), actions_menu, self.toggle_mean_fun, checkable=True)
+        self.create_action('Loading mean', QKeySequence("Ctrl+l"), view_menu, self.toggle_loading_mean_fun,
+                           checkable=True)
+        self.create_action('Unloading mean', QKeySequence("Ctrl+u"), view_menu, self.toggle_unloading_mean_fun,
+                           checkable=True)
 
         self.create_action('Open Folder', QKeySequence("Ctrl+O"), file_menu, self.open_folder_fun)
         self.create_action('Save', QKeySequence("Ctrl+S"), file_menu, self.save_fun)
@@ -115,9 +126,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def refresh_plot(self):
         self.clear_layout(self.layout)
         self.experiments.process()
-        sc = MplCanvas(self, experiment=self.experiments.get_selected(), experiments=self.experiments,
-                       stiffness=self.stiffness, all_points=self.all_points,
-                       loading=self.loading, unloading=self.unloading, mean=self.mean,trashed=self.trashed)
+        sc = MplCanvas(self)
+
         toolbar = NavigationToolbar(sc, self)
 
         self.layout.addWidget(toolbar)
@@ -159,19 +169,29 @@ class MainWindow(QtWidgets.QMainWindow):
         self.all_points = not self.all_points
         self.refresh_plot()
 
-    def toggle_loading_fun(self):
-        print("toggle_loading_fun")
-        self.loading = not self.loading
-        self.refresh_plot()
-
     def toggle_trashed_fun(self):
         print("toggle_trashed_fun")
         self.trashed = not self.trashed
         self.refresh_plot()
 
+    def toggle_loading_fun(self):
+        print("toggle_loading_fun")
+        self.loading = not self.loading
+        self.refresh_plot()
+
     def toggle_unloading_fun(self):
         print("toggle_unloading_fun")
         self.unloading = not self.unloading
+        self.refresh_plot()
+
+    def toggle_loading_mean_fun(self):
+        print("toggle_loading_mean_fun")
+        self.loading_mean = not self.loading_mean
+        self.refresh_plot()
+
+    def toggle_unloading_mean_fun(self):
+        print("toggle_unloading_mean_fun")
+        self.unloading_mean = not self.unloading_mean
         self.refresh_plot()
 
     def toggle_mean_fun(self):

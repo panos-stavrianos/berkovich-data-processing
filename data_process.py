@@ -218,7 +218,6 @@ class Experiments:
         self.mean_cut_off_curve = Curve()
         self.mean_stiffness_curve = Curve()
 
-        # self.mean_cut_off()
         self.find_mean_of_all()
 
     def mean(self, the_curve, experiments):
@@ -342,15 +341,6 @@ class Experiments:
                 axes.scatter(experiment.stiffness_curve.load_discharge, experiment.stiffness_curve.position_discharge,
                              c=color, s=1,
                              alpha=0.3, edgecolors='none')
-        if mean:
-            if loading:
-                axes.plot(self.mean_stiffness_curve.load, self.mean_stiffness_curve.position,
-                          color='green',
-                          label="mean loading")
-            if unloading:
-                axes.plot(self.mean_stiffness_curve.load_discharge, self.mean_stiffness_curve.position_discharge,
-                          color='yellow',
-                          label="mean unloading")
 
     def plot_all_cutoff_points(self, axes, loading=True, unloading=True, trashed=False):
         for experiment in self.experiments:
@@ -378,6 +368,7 @@ class Experiments:
                       label="mean unloading")
 
     def plot_mean_stiffness(self, axes, loading=True, unloading=True):
+        self.find_mean_of_all()
         if unloading:
             axes.plot(self.mean_stiffness_curve.load_discharge, self.mean_stiffness_curve.position_discharge,
                       color='yellow',
@@ -411,4 +402,19 @@ class Experiments:
             stiffness_curve = pd.DataFrame(stiffness_curve_discharge, columns=['Load', 'Displacement'])
             stiffness_curve.to_csv(f'{path}/{filename}_unloading.csv', index=False, header=True)
             counter += 1
+
+        mean_curve = {
+            'Load': self.mean_stiffness_curve.load,
+            'Displacement': self.mean_stiffness_curve.position
+        }
+        mean_curve = pd.DataFrame(mean_curve, columns=['Load', 'Displacement'])
+        mean_curve.to_csv(f'{path}/mean_loading.csv', index=False, header=True)
+
+        mean_curve_discharge = {
+            'Load': self.mean_stiffness_curve.load_discharge,
+            'Displacement': self.mean_stiffness_curve.position_discharge
+        }
+        mean_curve_discharge = pd.DataFrame(mean_curve_discharge, columns=['Load', 'Displacement'])
+        mean_curve_discharge.to_csv(f'{path}/mean_unloading.csv', index=False, header=True)
+
         return counter, path
