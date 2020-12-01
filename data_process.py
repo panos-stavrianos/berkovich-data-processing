@@ -1,5 +1,6 @@
 import glob
 import os
+import traceback
 from datetime import datetime
 
 import matplotlib.pyplot as plt
@@ -103,9 +104,19 @@ class Experiment:
 
             self.filename = os.path.basename(path)
             tdms_file = TdmsFile.read(path)
+
             group = tdms_file['Untitled']
-            position = group['Position'][:]
-            load = group['Load'][:]
+
+            if 'Load' in group:
+                load = group['Load'][:]
+            else:
+                load = group['Untitled 1'][:]
+
+            if 'Position' in group:
+                position = group['Position'][:]
+            else:
+                position = group['Untitled'][:]
+
             peek_pos_index = np.argmin(position) + 1  # for discharge
 
             self.original = Curve(load=load[:peek_pos_index + 1],
@@ -118,7 +129,8 @@ class Experiment:
             self.mirror_offset_curve = self.mirror_and_offset()
             self.stiffness_curve = self.stiffness()
             self.validity_check()
-        except:
+        except Exception as e:
+            traceback.print_exc()
             self.failed = True
 
     def process(self):
