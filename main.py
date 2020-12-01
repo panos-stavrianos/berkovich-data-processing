@@ -22,24 +22,17 @@ class MplCanvas(FigureCanvasQTAgg):
         if experiment.failed:
             self.axes.text(0.5, 0.5, f"FAILED\n{experiment.filename}", bbox=dict(facecolor='red', alpha=0.9))
         else:
-            if parent.stiffness:
-                if parent.all_points:
-                    parent.experiments.plot_all_stiffness_points(self.axes, loading=parent.loading,
-                                                                 unloading=parent.unloading,
-                                                                 trashed=parent.trashed)
+            if parent.parameters['stiffness']:
+                if parent.parameters['all_points']:
+                    parent.experiments.plot_all_stiffness_points(self.axes, params=parent.parameters)
 
-                parent.experiments.plot_mean_stiffness(self.axes, loading=parent.loading_mean,
-                                                       unloading=parent.unloading_mean)
-                experiment.plot_stiffness(self.axes, loading=parent.loading, unloading=parent.unloading)
+                parent.experiments.plot_mean_stiffness(self.axes, params=parent.parameters)
+                experiment.plot_stiffness(self.axes, params=parent.parameters)
             else:
-                if parent.all_points:
-                    parent.experiments.plot_all_cutoff_points(self.axes, loading=parent.loading,
-                                                              unloading=parent.unloading,
-                                                              trashed=parent.trashed)
+                if parent.parameters['all_points']:
+                    parent.experiments.plot_all_cutoff_points(self.axes, params=parent.parameters)
 
-                parent.experiments.plot_mean_cutoff_points(self.axes, loading=parent.loading_mean,
-                                                           unloading=parent.unloading_mean)
-                experiment.plot_cutoff(self.axes, loading=parent.loading, unloading=parent.unloading)
+                experiment.plot_cutoff(self.axes, params=parent.parameters)
 
         super(MplCanvas, self).__init__(fig)
 
@@ -52,15 +45,13 @@ class MainWindow(QtWidgets.QMainWindow):
         dialog = QFileDialog()
         self.experiments = Experiments(dialog.getExistingDirectory(self, 'Select the dataset folder'))
 
-        self.stiffness = False
-        self.all_points = False
-        self.loading = True
-        self.unloading = True
-
-        self.trashed = False
-
-        self.loading_mean = False
-        self.unloading_mean = False
+        self.parameters = {'stiffness': False,
+                           'all_points': False,
+                           'loading': True,
+                           'unloading': True,
+                           'trashed': False,
+                           'loading_mean': False,
+                           'unloading_mean': False}
 
         self.layout = QtWidgets.QVBoxLayout()
         self.refresh_plot()
@@ -115,14 +106,6 @@ class MainWindow(QtWidgets.QMainWindow):
         widget.setLayout(self.layout)
         self.setCentralWidget(widget)
 
-    def set_manual_cutoff(self):
-        max_pos, min_pos = self.experiments.get_selected_min_max()
-        d, okPressed = QInputDialog.getDouble(self, "Set Manual Cutoff", "Value: 0 for auto",
-                                              max_pos, min_pos, max_pos, 5)
-        if okPressed:
-            self.experiments.set_cut_off_position(d)
-        self.refresh_plot()
-
     def refresh_plot(self):
         self.clear_layout(self.layout)
         self.experiments.process()
@@ -138,6 +121,15 @@ class MainWindow(QtWidgets.QMainWindow):
         widget.setLayout(self.layout)
         self.setCentralWidget(widget)
         self.add_status()
+
+    def set_manual_cutoff(self):
+        max_pos, min_pos = self.experiments.get_selected_min_max()
+
+        d, okPressed = QInputDialog.getDouble(self, "Set Manual Cutoff", "Value: 0 for auto",
+                                              self.experiments.get_cut_off_position(), min_pos, max_pos, 5)
+        if okPressed:
+            self.experiments.set_cut_off_position(d)
+        self.refresh_plot()
 
     def to_next(self):
         print("to_next")
@@ -161,42 +153,37 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def toggle_plot_fun(self):
         print("toggle_plot_fun")
-        self.stiffness = not self.stiffness
+        self.parameters['stiffness'] = not self.parameters['stiffness']
         self.refresh_plot()
 
     def toggle_all_points_fun(self):
         print("toggle_plot_fun")
-        self.all_points = not self.all_points
+        self.parameters['all_points'] = not self.parameters['all_points']
         self.refresh_plot()
 
     def toggle_trashed_fun(self):
         print("toggle_trashed_fun")
-        self.trashed = not self.trashed
+        self.parameters['trashed'] = not self.parameters['trashed']
         self.refresh_plot()
 
     def toggle_loading_fun(self):
         print("toggle_loading_fun")
-        self.loading = not self.loading
+        self.parameters['loading'] = not self.parameters['loading']
         self.refresh_plot()
 
     def toggle_unloading_fun(self):
         print("toggle_unloading_fun")
-        self.unloading = not self.unloading
+        self.parameters['unloading'] = not self.parameters['unloading']
         self.refresh_plot()
 
     def toggle_loading_mean_fun(self):
         print("toggle_loading_mean_fun")
-        self.loading_mean = not self.loading_mean
+        self.parameters['loading_mean'] = not self.parameters['loading_mean']
         self.refresh_plot()
 
     def toggle_unloading_mean_fun(self):
         print("toggle_unloading_mean_fun")
-        self.unloading_mean = not self.unloading_mean
-        self.refresh_plot()
-
-    def toggle_mean_fun(self):
-        print("toggle_mean_fun")
-        self.mean = not self.mean
+        self.parameters['unloading_mean'] = not self.parameters['unloading_mean']
         self.refresh_plot()
 
     def open_folder_fun(self):

@@ -1,12 +1,43 @@
 import glob
 import os
 from datetime import datetime
+
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from nptdms import TdmsFile
 from scipy.signal import savgol_filter
-import pandas as pd
 from scipy.stats import stats
-import matplotlib.pyplot as plt
+
+
+def sort(a, b):
+    c = np.rec.fromarrays([a, b])
+    c.sort()
+    return c.f0, c.f1
+
+
+def exp_fit2(x, a, b, c):
+    return a * np.exp(-b * x) + c
+
+
+def exp_fit(x, a, b, c, d, e, f):
+    return (a * x) + (b * x ** 2) + (c * x ** 3) + (d * x ** 4) + (e * x ** 5) + f
+
+
+def moving_average(x, N=20):
+    out = np.zeros_like(x, dtype=np.float64)
+    dim_len = x.shape[0]
+    for i in range(dim_len):
+        if N % 2 == 0:
+            a, b = i - (N - 1) // 2, i + (N - 1) // 2 + 2
+        else:
+            a, b = i - (N - 1) // 2, i + (N - 1) // 2 + 1
+
+        # cap indices to min and max indices
+        a = max(0, a)
+        b = min(dim_len, b)
+        out[i] = np.mean(x[a:b])
+    return out
 
 
 def smooth_fun(arr, span=20):
@@ -28,26 +59,22 @@ class Curve:
         self.position = position
         self.position_discharge = position_discharge
 
-    def interpolate(self, loading_len, unloading_len, cutoff=False):
+    def interpolate(self, loading_len, unloading_len):
         load = smooth_fun(self.load)
         position = smooth_fun(self.position)
         load_discharge = smooth_fun(self.load_discharge)
         position_discharge = smooth_fun(self.position_discharge)
 
-        if cutoff:
-            position = np.flip(position)
-            load = np.flip(load)
-        else:
-            position_discharge = np.flip(position_discharge)
-            load_discharge = np.flip(load_discharge)
-        x_vals = np.linspace(min(self.position), max(self.position), loading_len)
-        x_vals_discharge = np.linspace(min(self.position_discharge), max(self.position_discharge), unloading_len)
+        position_discharge = np.flip(position_discharge)
+        load_discharge = np.flip(load_discharge)
 
-        y_interp = np.interp(x_vals, position, load)
-        y_interp_discharge = np.interp(x_vals_discharge, position_discharge, load_discharge)
+        load_vals = np.linspace(min(self.load), max(self.load), loading_len)
+        load_vals_discharge = np.linspace(min(self.load_discharge), max(self.load_discharge), unloading_len)
 
-        return Curve(load=y_interp, load_discharge=y_interp_discharge,
-                     position=x_vals, position_discharge=x_vals_discharge)
+        pos_interp = np.interp(load_vals, load, position)
+        pos_interp_discharge = np.interp(load_vals_discharge, load_discharge, position_discharge)
+        return Curve(load=load_vals, load_discharge=load_vals_discharge,
+                     position=pos_interp, position_discharge=pos_interp_discharge)
 
     def plot(self):
         plt.xlabel('Load [grF]')
@@ -59,6 +86,11 @@ class Curve:
 
         plt.legend(bbox_to_anchor=(.7, 1), loc='upper left')
         plt.show()
+
+    def smooth(self, window):
+        return Curve(load=smooth_fun(self.load, window), load_discharge=smooth_fun(self.load_discharge, window),
+                     position=smooth_fun(self.position, window),
+                     position_discharge=smooth_fun(self.position_discharge, window))
 
 
 class Experiment:
@@ -165,15 +197,15 @@ class Experiment:
                                                                        self.stiffness_curve.position)
         self.status = "TRASH" if slope < 0 else "KEEP"
 
-    def plot_cutoff(self, axes, loading=True, unloading=True):
+    def plot_cutoff(self, axes, params):
         axes.set_title('Initial Measurement')
         axes.set_xlabel('Displacement [μm]')
         axes.set_ylabel('Load [grF]')
-        if loading:
+        if params['loading']:
             axes.plot(self.original.position, self.original.load, color='#6a84fb', label="loading offset")
             axes.plot(self.cut_off_curve.position, self.cut_off_curve.load, color=loading_color, label="loading")
 
-        if unloading:
+        if params['unloading']:
             axes.plot(self.original.position_discharge, self.original.load_discharge, color='#e460b0',
                       label="uloading offset")
             axes.plot(self.cut_off_curve.position_discharge, self.cut_off_curve.load_discharge, color=unloading_color,
@@ -184,13 +216,13 @@ class Experiment:
 
         axes.legend(bbox_to_anchor=(.7, 1), loc='upper left', borderaxespad=0.)
 
-    def plot_stiffness(self, axes, loading=True, unloading=True):
+    def plot_stiffness(self, axes, params):
         axes.set_title('Stiffness Corrected Measurement')
         axes.set_xlabel('Load [grF]')
         axes.set_ylabel('Displacement [μm]\nDcorrected')
-        if loading:
+        if params['loading']:
             axes.plot(self.stiffness_curve.load, self.stiffness_curve.position, color=loading_color, label="loading")
-        if unloading:
+        if params['unloading']:
             axes.plot(self.stiffness_curve.load_discharge, self.stiffness_curve.position_discharge,
                       color=unloading_color,
                       label="unloading")
@@ -217,12 +249,8 @@ class Experiments:
 
         self.mean_cut_off_curve = Curve()
         self.mean_stiffness_curve = Curve()
-
+        self.mean_window = 20
         self.find_mean_of_all()
-
-    def mean(self, the_curve, experiments):
-        arrs = list(map(the_curve, experiments))
-        return self.avgNestedLists(arrs)
 
     def avgNestedLists(self, nested_vals):
         """
@@ -246,41 +274,22 @@ class Experiments:
         data = list(map(curve, experiments))
         return max(list(map(lambda x: len(x), data)))
 
-    def movingaverage(self, interval, window_size):
-        window = np.ones(int(window_size)) / float(window_size)
-        return np.convolve(interval, window, 'same')
-
     def find_mean_of_all(self):
         experiments = list(filter(lambda x: not x.failed and x.status != "TRASH", self.experiments))
         loading_len = self.find_max_len(lambda x: x.cut_off_curve.position, experiments)
         unloading_len = self.find_max_len(lambda x: x.cut_off_curve.position_discharge, experiments)
-        experiments_cut_off_interp = list(
-            map(lambda x: x.cut_off_curve.interpolate(loading_len, unloading_len, cutoff=True), experiments))
-        experiments_stiffness_interp = list(
-            map(lambda x: x.stiffness_curve.interpolate(loading_len, unloading_len, cutoff=False), experiments))
-        print(experiments_stiffness_interp)
+        experiments_stiffness_interp = np.array(list(
+            map(lambda x: x.stiffness_curve.interpolate(loading_len, unloading_len), experiments)))
 
-        cut_off_loads = list(map(lambda x: x.load, experiments_cut_off_interp))
-        cut_off_loads_discharge = list(map(lambda x: x.load_discharge, experiments_cut_off_interp))
-        cut_off_positions = list(map(lambda x: x.position, experiments_cut_off_interp))
-        cut_off_positions_discharge = list(map(lambda x: x.position_discharge, experiments_cut_off_interp))
-
-        stiffness_loads = list(map(lambda x: x.load, experiments_stiffness_interp))
+        stiffness_loads = np.array(list(map(lambda x: x.load, experiments_stiffness_interp)))
         stiffness_loads_discharge = list(map(lambda x: x.load_discharge, experiments_stiffness_interp))
-        stiffness_positions = list(map(lambda x: x.position, experiments_stiffness_interp))
+        stiffness_positions = np.array(list(map(lambda x: x.position, experiments_stiffness_interp)))
         stiffness_positions_discharge = list(map(lambda x: x.position_discharge, experiments_stiffness_interp))
-
-        self.mean_cut_off_curve = Curve(
-            load=np.average(cut_off_loads, axis=0),
-            load_discharge=np.average(cut_off_loads_discharge, axis=0),
-            position=np.average(cut_off_positions, axis=0),
-            position_discharge=np.average(cut_off_positions_discharge, axis=0))
-
         self.mean_stiffness_curve = Curve(
-            load=np.average(stiffness_loads, axis=0),
-            load_discharge=np.average(stiffness_loads_discharge, axis=0),
-            position=np.average(stiffness_positions, axis=0),
-            position_discharge=np.average(stiffness_positions_discharge, axis=0))
+            load=np.mean(stiffness_loads, axis=0),
+            position=np.mean(stiffness_positions, axis=0),
+            load_discharge=np.mean(stiffness_loads_discharge, axis=0),
+            position_discharge=np.mean(stiffness_positions_discharge, axis=0)).smooth(10)
 
     def next(self):
         self.pos = min(self.pos + 1, len(self.experiments) - 1)
@@ -303,6 +312,9 @@ class Experiments:
 
     def set_cut_off_position(self, value):
         self.get_selected().cut_off_position = value
+
+    def get_cut_off_position(self):
+        return self.get_selected().cut_off_position
 
     def get_stats(self):
         n_of_experiments = len(self.experiments)
@@ -327,53 +339,44 @@ class Experiments:
                f'   trashed: {trashed}   |   remaining: {remaining}   |   ' \
                f'failed: {failed}   |   {self.get_selected().filename}'
 
-    def plot_all_stiffness_points(self, axes, loading=True, unloading=True, mean=False, trashed=False):
+    def plot_all_stiffness_points(self, axes, params):
         for experiment in self.experiments:
-            if experiment.failed or (not trashed and experiment.status == "TRASH"):
+            if experiment.failed or (not params['trashed'] and experiment.status == "TRASH"):
                 continue
-            if loading:
+            if params['loading']:
                 color = "#ff2d2d" if experiment.status == "TRASH" else loading_color
                 axes.scatter(experiment.stiffness_curve.load, experiment.stiffness_curve.position, c=color, s=1,
                              alpha=0.3, edgecolors='none')
 
-            if unloading:
+            if params['unloading']:
                 color = "#ffd22d" if experiment.status == "TRASH" else unloading_color
                 axes.scatter(experiment.stiffness_curve.load_discharge, experiment.stiffness_curve.position_discharge,
                              c=color, s=1,
                              alpha=0.3, edgecolors='none')
 
-    def plot_all_cutoff_points(self, axes, loading=True, unloading=True, trashed=False):
+    def plot_all_cutoff_points(self, axes, params):
         for experiment in self.experiments:
-            if experiment.failed or (not trashed and experiment.status == "TRASH"):
+            if experiment.failed or (not params['trashed'] and experiment.status == "TRASH"):
                 continue
-            if loading:
+            if params['loading']:
                 color = "#ff2d2d" if experiment.status == "TRASH" else loading_color
                 axes.scatter(experiment.cut_off_curve.position, experiment.cut_off_curve.load, c=color, s=1,
                              alpha=0.3, edgecolors='none')
-            if unloading:
+            if params['unloading']:
                 color = "#ffd22d" if experiment.status == "TRASH" else unloading_color
 
                 axes.scatter(experiment.cut_off_curve.position_discharge, experiment.cut_off_curve.load_discharge,
                              c=color, s=1,
                              alpha=0.3, edgecolors='none')
 
-    def plot_mean_cutoff_points(self, axes, loading=True, unloading=True):
-        if loading:
-            axes.plot(self.mean_cut_off_curve.position, self.mean_cut_off_curve.load,
-                      color='green',
-                      label="mean loading")
-        if unloading:
-            axes.plot(self.mean_cut_off_curve.position_discharge, self.mean_cut_off_curve.load_discharge,
-                      color='black',
-                      label="mean unloading")
-
-    def plot_mean_stiffness(self, axes, loading=True, unloading=True):
+    def plot_mean_stiffness(self, axes, params):
         self.find_mean_of_all()
-        if unloading:
+
+        if params['unloading_mean']:
             axes.plot(self.mean_stiffness_curve.load_discharge, self.mean_stiffness_curve.position_discharge,
                       color='yellow',
                       label="mean unloading")
-        if loading:
+        if params['loading_mean']:
             axes.plot(self.mean_stiffness_curve.load, self.mean_stiffness_curve.position,
                       color='green',
                       label="mean loading")
@@ -392,7 +395,7 @@ class Experiments:
                 'Displacement': experiment.stiffness_curve.position
             }
             stiffness_curve = pd.DataFrame(stiffness_curve, columns=['Load', 'Displacement'])
-            stiffness_curve.to_csv(f'{path}/{filename}_loading.csv', index=False, header=True)
+            stiffness_curve.to_csv(f'{path}/{filename}_loading.csv', sep=';', index=False, header=True)
 
             stiffness_curve_discharge = {
                 'Load': experiment.stiffness_curve.load_discharge,
@@ -400,7 +403,7 @@ class Experiments:
             }
 
             stiffness_curve = pd.DataFrame(stiffness_curve_discharge, columns=['Load', 'Displacement'])
-            stiffness_curve.to_csv(f'{path}/{filename}_unloading.csv', index=False, header=True)
+            stiffness_curve.to_csv(f'{path}/{filename}_unloading.csv', sep=';', index=False, header=True)
             counter += 1
 
         mean_curve = {
@@ -408,13 +411,13 @@ class Experiments:
             'Displacement': self.mean_stiffness_curve.position
         }
         mean_curve = pd.DataFrame(mean_curve, columns=['Load', 'Displacement'])
-        mean_curve.to_csv(f'{path}/mean_loading.csv', index=False, header=True)
+        mean_curve.to_csv(f'{path}/mean_loading.csv', index=False, sep=';', header=True)
 
         mean_curve_discharge = {
             'Load': self.mean_stiffness_curve.load_discharge,
             'Displacement': self.mean_stiffness_curve.position_discharge
         }
         mean_curve_discharge = pd.DataFrame(mean_curve_discharge, columns=['Load', 'Displacement'])
-        mean_curve_discharge.to_csv(f'{path}/mean_unloading.csv', index=False, header=True)
+        mean_curve_discharge.to_csv(f'{path}/mean_unloading.csv', sep=';', index=False, header=True)
 
         return counter, path
