@@ -6,6 +6,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy
 from nptdms import TdmsFile
 from scipy.signal import savgol_filter
 from scipy.stats import stats
@@ -25,26 +26,24 @@ def exp_fit(x, a, b, c, d, e, f):
     return (a * x) + (b * x ** 2) + (c * x ** 3) + (d * x ** 4) + (e * x ** 5) + f
 
 
-def moving_average(x, N=20):
-    out = np.zeros_like(x, dtype=np.float64)
-    dim_len = x.shape[0]
-    for i in range(dim_len):
-        if N % 2 == 0:
-            a, b = i - (N - 1) // 2, i + (N - 1) // 2 + 2
-        else:
-            a, b = i - (N - 1) // 2, i + (N - 1) // 2 + 1
 
-        # cap indices to min and max indices
-        a = max(0, a)
-        b = min(dim_len, b)
-        out[i] = np.mean(x[a:b])
-    return out
+
+def smooth_convolve(arr, span=20):
+    smooth_batch = int(len(arr) / span)  # find smoothing window (ex. every 5 points)
+    if smooth_batch % 2 == 0:  # smoothing window must be odd
+        smooth_batch += 1
+    if smooth_batch < 2:
+        smooth_batch = 3
+    return np.convolve(arr, np.ones(smooth_batch) / smooth_batch, mode='valid')
+
 
 
 def smooth_fun(arr, span=20):
     smooth_batch = int(len(arr) / span)  # find smoothing window (ex. every 5 points)
     if smooth_batch % 2 == 0:  # smoothing window must be odd
         smooth_batch += 1
+    if smooth_batch < 2:
+        smooth_batch = 3
     return savgol_filter(arr, smooth_batch, 2)
 
 
@@ -55,6 +54,7 @@ unloading_color = '#9c2a6f'
 class Curve:
     def __init__(self, position=np.array([]), load=np.array([]), position_discharge=np.array([]),
                  load_discharge=np.array([])):
+
         self.load = load
         self.load_discharge = load_discharge
         self.position = position
@@ -80,12 +80,17 @@ class Curve:
     def plot(self):
         plt.xlabel('Load [grF]')
         plt.ylabel('Displacement [μm]\nDcorrected')
+        plt.xlim([-1, 1.8])
+        plt.ylim([20, 30])
+
         plt.plot(self.load, self.position, color=loading_color, label="loading")
         plt.plot(self.load_discharge, self.position_discharge,
                  color=unloading_color,
                  label="unloading")
 
         plt.legend(bbox_to_anchor=(.7, 1), loc='upper left')
+        figManager = plt.get_current_fig_manager()
+        figManager.window.showMaximized()
         plt.show()
 
     def smooth(self, window):
@@ -93,10 +98,103 @@ class Curve:
                      position=smooth_fun(self.position, window),
                      position_discharge=smooth_fun(self.position_discharge, window))
 
+    def stiffness(self):
+        return Curve(load=self.load,
+                     load_discharge=self.load_discharge,
+                     position=self.position -
+                              self.load * 0.2125,
+                     position_discharge=self.position_discharge -
+                                        self.load_discharge * 0.2125)
+
+    def offset_load(self, real_max_load=1.5):
+        max_load = self.load[-1]
+        diff = real_max_load - max_load
+        diff = 0
+        return Curve(load=self.load + diff,
+                     load_discharge=self.load_discharge + diff,
+                     position=self.position,
+                     position_discharge=self.position_discharge)
+
+    def mirror_and_offset(self):
+        n0 = self.position[0]
+        return Curve(load=self.load,
+                     load_discharge=self.load_discharge,
+                     position=n0 - self.position,
+                     position_discharge=n0 - self.position_discharge)
+
+    def cut_off_inactive(self, derivative_offset, cut_off_position):
+        if cut_off_position != 0:  # Manual cutoff
+            tmp_pos = self.position[self.position > cut_off_position]
+
+            if len(tmp_pos) > 0:  # if not empty
+                offset_position = np.min(tmp_pos)  # value of the discharge position
+
+                offset_index_position = \
+                    np.where(self.position == offset_position)[0][0]
+            else:
+                offset_index_position = 0
+
+            tmp_pos = self.position_discharge[
+                self.position_discharge > cut_off_position]
+            if len(tmp_pos) > 0:  # if not empty
+                offset_position_discharge = np.min(tmp_pos)  # value of the discharge position
+                offset_index_position_discharge = \
+                    np.where(self.position_discharge == offset_position_discharge)[0][0]
+            else:
+                offset_index_position_discharge = -1
+
+            return Curve(load=self.load[offset_index_position:],
+                         load_discharge=self.load_discharge[:offset_index_position_discharge],
+                         position=self.position[offset_index_position:],
+                         position_discharge=self.position_discharge[:offset_index_position_discharge])
+        # Automatic cutoff
+        dl_dp = np.gradient(self.load, self.position)  # get the derivative
+
+        smooth_dl_dp = smooth_fun(dl_dp)
+        # find the closest value to derivative_offset
+        offset_value = np.min(smooth_dl_dp[smooth_dl_dp > derivative_offset])
+        # find index of this value, aka the load offset
+        offset_index = np.where(smooth_dl_dp == offset_value)[0][0]
+
+        offset_position = self.position[offset_index]  # value of the charge position
+        offset_position_discharge = np.min(
+            self.position_discharge[
+                self.position_discharge > offset_position])  # value of the discharge position
+        offset_index_position_discharge = \
+            np.where(self.position_discharge == offset_position_discharge)[0][0]
+
+        # keep only the values after the offset, both on load and position
+        # for the discharge we offset based on the position we calculate
+        return Curve(load=self.load[offset_index:],
+                     load_discharge=self.load_discharge[:offset_index_position_discharge],
+                     position=self.position[offset_index:],
+                     position_discharge=self.position_discharge[:offset_index_position_discharge])
+
+    def recalculate_load_upload(self):
+        l = np.concatenate([self.load, self.load_discharge])
+        p = np.concatenate([self.position, self.position_discharge])
+        split_index = np.argmin(p) + 1
+        self.load = l[:split_index]
+        self.load_discharge = l[split_index:]
+        self.position = p[:split_index]
+        self.position_discharge = p[split_index:]
+
+    def connect_load_unload(self):
+        connected = Curve(load=self.load,
+                          load_discharge=self.load_discharge,
+                          position=self.position,
+                          position_discharge=self.position_discharge)
+
+        connected.load_discharge[0] = self.load[-1]
+        connected.position_discharge[0] = self.position[-1]
+        return connected
+
 
 class Experiment:
 
     def __init__(self, path, derivative_offset=-0.1):
+        self.derivative_offset = derivative_offset
+
         try:
             self.failed = False
             self.status = "UNKNOWN"
@@ -116,110 +214,75 @@ class Experiment:
                 position = group['Position'][:]
             else:
                 position = group['Untitled'][:]
+            load, position = smooth_convolve(load, 700), smooth_convolve(position, 700)
 
-            peek_pos_index = np.argmin(position) + 1  # for discharge
+            peek_load_index = np.argmax(load)  # for discharge
+            self.original = Curve(load=load[:peek_load_index],
+                                  position=position[:peek_load_index],
+                                  load_discharge=load[peek_load_index:],
+                                  position_discharge=position[peek_load_index:])
+            #self.original.plot()
 
-            self.original = Curve(load=load[:peek_pos_index + 1],
-                                  load_discharge=load[peek_pos_index:],
-                                  position=position[:peek_pos_index + 1],
-                                  position_discharge=position[peek_pos_index:])
+            load, position = smooth_convolve(load, 70), smooth_convolve(position, 70)
 
-            self.derivative_offset = derivative_offset
-            self.cut_off_curve = self.cut_off_inactive()
-            self.mirror_offset_curve = self.mirror_and_offset()
-            self.stiffness_curve = self.stiffness()
+            load, position = smooth_fun(load, 70), smooth_fun(position, 70)
+            load, position = smooth_convolve(load, 50), smooth_convolve(position, 50)
+            # load, position = smooth_convolve(load, 20), smooth_convolve(position, 20)
+
+
+            peek_load_index = np.argmax(load)  # for discharge
+
+            self.original_smooth = Curve(load=load[:peek_load_index],
+                                  position=position[:peek_load_index],
+                                  load_discharge=load[peek_load_index:],
+                                  position_discharge=position[peek_load_index:])
+            #self.original.plot()
+            self.stiffness_curve = None
+            self.offset_load = None
+            self.cut_off_curve = None
+            self.mirror_offset_curve = None
+
+            self.process()
             self.validity_check()
-        except Exception as e:
+        except Exception:
+            print(self.filename)
             traceback.print_exc()
+            print('-----------------------------------')
             self.failed = True
+
+    def __repr__(self):
+        return f'status: {self.status}'
 
     def process(self):
         if not self.failed:
-            self.cut_off_curve = self.cut_off_inactive()
-            self.mirror_offset_curve = self.mirror_and_offset()
-            self.stiffness_curve = self.stiffness()
+            # self.original.plot()
 
-    def cut_off_inactive(self):
-        if self.cut_off_position != 0:  # Manual cutoff
-            tmp_pos = self.original.position[self.original.position > self.cut_off_position]
+            self.original_stiffness = self.original.stiffness()
+            self.stiffness_curve = self.original_smooth.stiffness()
 
-            if len(tmp_pos) > 0:  # if not empty
-                offset_position = np.min(tmp_pos)  # value of the discharge position
+            self.offset_load = self.stiffness_curve.offset_load()
+            self.cut_off_curve = self.stiffness_curve.cut_off_inactive(self.derivative_offset, self.cut_off_position)
 
-                offset_index_position = \
-                    np.where(self.original.position == offset_position)[0][0]
-            else:
-                offset_index_position = 0
-
-            tmp_pos = self.original.position_discharge[self.original.position_discharge > self.cut_off_position]
-            if len(tmp_pos) > 0:  # if not empty
-                offset_position_discharge = np.min(tmp_pos)  # value of the discharge position
-                offset_index_position_discharge = \
-                    np.where(self.original.position_discharge == offset_position_discharge)[0][0]
-            else:
-                offset_index_position_discharge = -1
-
-            return Curve(load=self.original.load[offset_index_position:],
-                         load_discharge=self.original.load_discharge[:offset_index_position_discharge],
-                         position=self.original.position[offset_index_position:],
-                         position_discharge=self.original.position_discharge[:offset_index_position_discharge])
-
-        smooth_load = smooth_fun(self.original.load)
-        smooth_position = smooth_fun(self.original.position)
-
-        dl_dp = np.gradient(smooth_load, smooth_position)  # get the derivative
-
-        smooth_dl_dp = smooth_fun(dl_dp)
-        # find the closest value to derivative_offset
-        offset_value = np.min(smooth_dl_dp[smooth_dl_dp > self.derivative_offset])
-        # find index of this value, aka the load offset
-        offset_index = np.where(smooth_dl_dp == offset_value)[0][0]
-
-        offset_position = self.original.position[offset_index]  # value of the charge position
-        offset_position_discharge = np.min(
-            self.original.position_discharge[
-                self.original.position_discharge > offset_position])  # value of the discharge position
-        offset_index_position_discharge = np.where(self.original.position_discharge == offset_position_discharge)[0][0]
-
-        # keep only the values after the offset, both on load and position
-        # for the discharge we offset based on the position we calculate
-        return Curve(load=self.original.load[offset_index:],
-                     load_discharge=self.original.load_discharge[:offset_index_position_discharge],
-                     position=self.original.position[offset_index:],
-                     position_discharge=self.original.position_discharge[:offset_index_position_discharge])
-
-    def mirror_and_offset(self):
-        n0 = self.cut_off_curve.position[0]
-
-        return Curve(load=self.cut_off_curve.load,
-                     load_discharge=self.cut_off_curve.load_discharge,
-                     position=n0 - self.cut_off_curve.position,
-                     position_discharge=n0 - self.cut_off_curve.position_discharge)
-
-    def stiffness(self):
-        return Curve(load=self.mirror_offset_curve.load,
-                     load_discharge=self.mirror_offset_curve.load_discharge,
-                     position=self.mirror_offset_curve.position -
-                              self.mirror_offset_curve.load * 1.757,
-                     position_discharge=self.mirror_offset_curve.position_discharge -
-                                        self.mirror_offset_curve.load_discharge * 1.757)
+            self.mirror_offset_curve = self.cut_off_curve.mirror_and_offset()
 
     def validity_check(self):
-        slope, intercept, r_value, p_value, std_err = stats.linregress(self.stiffness_curve.load,
-                                                                       self.stiffness_curve.position)
+        slope, intercept, r_value, p_value, std_err = stats.linregress(self.mirror_offset_curve.load,
+                                                                       self.mirror_offset_curve.position)
         self.status = "TRASH" if slope < 0 else "KEEP"
 
     def plot_cutoff(self, axes, params):
         axes.set_title('Initial Measurement')
         axes.set_xlabel('Displacement [μm]')
         axes.set_ylabel('Load [grF]')
+        axes.plot(self.original_stiffness.position, self.original_stiffness.load, color='gray',
+                  label="original")
         if params['loading']:
-            axes.plot(self.original.position, self.original.load, color='#6a84fb', label="loading offset")
+            axes.plot(self.offset_load.position, self.offset_load.load, color='#6a84fb', label="loading offset")
             axes.plot(self.cut_off_curve.position, self.cut_off_curve.load, color=loading_color, label="loading")
 
         if params['unloading']:
-            axes.plot(self.original.position_discharge, self.original.load_discharge, color='#e460b0',
-                      label="uloading offset")
+            axes.plot(self.offset_load.position_discharge, self.offset_load.load_discharge, color='#e460b0',
+                      label="unloading offset")
             axes.plot(self.cut_off_curve.position_discharge, self.cut_off_curve.load_discharge, color=unloading_color,
                       label="unloading")
 
@@ -233,9 +296,10 @@ class Experiment:
         axes.set_xlabel('Load [grF]')
         axes.set_ylabel('Displacement [μm]\nDcorrected')
         if params['loading']:
-            axes.plot(self.stiffness_curve.load, self.stiffness_curve.position, color=loading_color, label="loading")
+            axes.plot(self.mirror_offset_curve.load, self.mirror_offset_curve.position, color=loading_color,
+                      label="loading")
         if params['unloading']:
-            axes.plot(self.stiffness_curve.load_discharge, self.stiffness_curve.position_discharge,
+            axes.plot(self.mirror_offset_curve.load_discharge, self.mirror_offset_curve.position_discharge,
                       color=unloading_color,
                       label="unloading")
         axes.text(0, 1.03, self.status, transform=axes.transAxes,
@@ -262,6 +326,7 @@ class Experiments:
         self.mean_cut_off_curve = Curve()
         self.mean_stiffness_curve = Curve()
         self.mean_window = 20
+        print('find_mean_of_all')
         self.find_mean_of_all()
 
     def avgNestedLists(self, nested_vals):
@@ -288,6 +353,7 @@ class Experiments:
 
     def find_mean_of_all(self):
         experiments = list(filter(lambda x: not x.failed and x.status != "TRASH", self.experiments))
+
         loading_len = self.find_max_len(lambda x: x.cut_off_curve.position, experiments)
         unloading_len = self.find_max_len(lambda x: x.cut_off_curve.position_discharge, experiments)
         experiments_stiffness_interp = np.array(list(
@@ -301,7 +367,7 @@ class Experiments:
             load=np.mean(stiffness_loads, axis=0),
             position=np.mean(stiffness_positions, axis=0),
             load_discharge=np.mean(stiffness_loads_discharge, axis=0),
-            position_discharge=np.mean(stiffness_positions_discharge, axis=0)).smooth(10)
+            position_discharge=np.mean(stiffness_positions_discharge, axis=0))  # .smooth(10)
 
     def next(self):
         self.pos = min(self.pos + 1, len(self.experiments) - 1)
